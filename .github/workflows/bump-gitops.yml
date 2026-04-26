@@ -1,0 +1,50 @@
+name: Bump image tag in gitops-demo
+
+on:
+  workflow_run:
+    workflows: ["Build & push image"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  bump:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout gitops-demo
+        uses: actions/checkout@v4
+        with:
+          repository: yoanbernabeu/gitops-demo
+          token: ${{ secrets.GITOPS_REPO_TOKEN }}
+          ref: main
+
+      - name: Install yq
+        uses: mikefarah/yq@master
+
+      - name: Resolve image tag (full SHA of the source commit)
+        id: tag
+        run: echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump deployment image
+        env:
+          IMAGE: ghcr.io/yoanbernabeu/demo-app:${{ steps.tag.outputs.sha }}
+        run: |
+          set -eux
+          yq -i 'select(.kind == "Deployment").spec.template.spec.containers[] |= select(.name == "app").image = strenv(IMAGE)' \
+            apps/demo-app/deployment.yaml
+
+      - name: Commit & push
+        run: |
+          set -eux
+          git config user.name  "yoandev-ci-bot"
+          git config user.email "ci-bot@yoandev.co"
+          if git diff --quiet; then
+            echo "No image change, skipping commit."
+            exit 0
+          fi
+          git add apps/demo-app/deployment.yaml
+          git commit -m "chore(demo-app): bump image to ${{ steps.tag.outputs.sha }}"
+          git push origin main
